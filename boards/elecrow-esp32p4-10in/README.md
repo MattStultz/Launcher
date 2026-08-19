@@ -5,14 +5,20 @@ Board config for the [CrowPanel Advanced 10.1" ESP32-P4 HMI Display](https://www
 project — see that repo's `common/constants.h` and `docs/` for the
 underlying hardware research this is based on.
 
-## Status: untested on real hardware
+## Status: builds successfully, untested on real hardware
 
 This was built by adapting `boards/elecrow-esp32p4-7in` (Elecrow confirms
 the 7in/9in/10.1in boards share identical schematics/GPIO wiring — only
 the physical panel and its MIPI-DSI timing differ) and swapping in
 10.1in-specific display timing values sourced from Elecrow's own Arduino
-example for this exact SKU. It has not yet been flashed to real 10.1in
-hardware. If you're the one testing it, here's what to check first:
+example for this exact SKU.
+
+`pio run -e elecrow-esp32p4-10in` compiles and links cleanly (confirmed
+2026-08-19, ~110s, RAM 17.4%, Flash 8.4%). That only proves the config is
+internally consistent (no missing defines, no build-time contradictions)
+— it says nothing about whether the pin/timing values are actually
+correct. **It has not yet been flashed to real 10.1in hardware.** If
+you're the one testing it, here's what to check first:
 
 **Display doesn't sync (blank, torn, or rolling image)**: the MIPI-DSI
 timing values (`TFT_HSYNC_PULSE_WIDTH=70`, `TFT_VSYNC_PULSE_WIDTH=10`,

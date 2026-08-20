@@ -5,14 +5,15 @@
 #include <Wire.h>
 #include <interface.h>
 
-// Copied from boards/elecrow-esp32p4-7in/interface.cpp -- the P4 wiring
-// (touch, SD, backlight, SDIO WiFi bridge) is shared across the 7in/9in/
-// 10.1in CrowPanel Advanced boards per Elecrow's own docs, only the panel
-// itself and its MIPI-DSI timing differ (see this board's platformio.ini).
-// The SDIO override mechanism below exists because Elecrow's *documented*
-// schematic pin order for the 7in board's D0-D3 lines was wrong and had to
-// be found by testing on real hardware -- assume the same could be true
-// here until this board has been through the same process.
+// Elecrow's own docs disagree with themselves on the SDIO pinout of the
+// onboard ESP32-C6 co-processor between hardware revisions (the schematic's
+// D0-D3 order didn't work on the unit this was tested on; the reverse order,
+// now the build default, does -- confirmed working with the co-processor's
+// ESP-Hosted firmware: Wi-Fi scan and AP connect both succeed). Rather than
+// require a rebuild+reflash if a different revision needs the other order,
+// every pin can still be overridden at runtime from NVS (see the "sdio"
+// serial console command in serial_console.cpp), falling back to the
+// build-time SDIO2_* macros when no override is stored.
 static int8_t sdioPinOverride(const char *key, int8_t buildDefault) {
     lnvs::Handle h(SDIO_OVERRIDE_NVS_NS, false);
     if (!h) return buildDefault;
@@ -25,7 +26,6 @@ static int8_t sdioPinOverride(const char *key, int8_t buildDefault) {
 #define TOUCH_SDA_PIN GT911_I2C_CONFIG_SDA_IO_NUM
 #define TOUCH_SCL_PIN GT911_I2C_CONFIG_SCL_IO_NUM
 #define TOUCH_RST_PIN GT911_TOUCH_CONFIG_RST_GPIO_NUM
-#define TOUCH_INT_PIN GT911_TOUCH_CONFIG_INT_GPIO_NUM
 #define TOUCH_ADDR GT911_SLAVE_ADDRESS1
 
 #include <TouchLib.h>
@@ -50,20 +50,6 @@ ElecrowTouch touch;
 ** Description:   initial setup for the device
 ***************************************************************************************/
 void _setup_gpio() {
-    // GT911 I2C address latch. TouchLibCommon::begin() (called from inside
-    // touch.begin() in _post_setup_gpio, below) DOES toggle TOUCH_RST_PIN
-    // itself (low 200ms, high 200ms) -- but it never touches INT, so the
-    // address-select latch that happens on RST's rising edge is left to
-    // whatever INT floats to. We hold INT low here, before that reset runs,
-    // so it latches 0x5D (matching TOUCH_ADDR below) instead of 0x14 or an
-    // indeterminate floating value. Released back to INPUT in
-    // _post_setup_gpio() after touch.begin() completes. (A separate,
-    // earlier attempt at fixing this ran its own full reset pulse here
-    // instead -- that doesn't work, because TouchLibCommon's internal reset
-    // still runs afterward with INT unheld, undoing the address selection.)
-    pinMode(TOUCH_INT_PIN, OUTPUT);
-    digitalWrite(TOUCH_INT_PIN, LOW);
-
     Wire.begin(TOUCH_SDA_PIN, TOUCH_SCL_PIN);
     // LCD_BK_POWER: P-MOS load switch feeding the backlight boost converter's
     // VIN. Active LOW. Must be on before the boost EN (TFT_BL) does anything.
@@ -82,30 +68,15 @@ void _post_setup_gpio() {
     ledcAttach(TFT_BL, TFT_BRIGHT_FREQ, TFT_BRIGHT_Bits);
     ledcWrite(TFT_BL, bright);
 
-    bool touchOk = touch.begin();
-    pinMode(TOUCH_INT_PIN, INPUT); // release INT now that GT911's reset/address-latch is done
-    if (!touchOk) {
+    if (!touch.begin()) {
         launcherConsolePrintf("%s\n", String("Touch IC not Started").c_str());
         log_i("Touch IC not Started");
     } else launcherConsolePrintf("%s\n", String("Touch IC Started").c_str());
 
-    // DIAGNOSTIC (temporary): touch.begin()'s reported success is not
-    // trustworthy for GT911 in this TouchLib version -- ModulesGT911.tpp's
-    // init() returns true unconditionally whenever a reset pin is
-    // configured, regardless of whether the underlying I2C handshake in
-    // TouchLibCommon::begin() actually succeeded. Probe both possible GT911
-    // addresses directly to get ground truth on what's actually on the bus.
-    Wire.beginTransmission(0x5D);
-    uint8_t err5D = Wire.endTransmission();
-    Wire.beginTransmission(0x14);
-    uint8_t err14 = Wire.endTransmission();
-    launcherConsolePrintf("GT911 I2C probe: 0x5D err=%d (0=ACK)  0x14 err=%d (0=ACK)\n", err5D, err14);
-
     // ESP32-P4 has no native radio; WiFi/BT come from the onboard ESP32-C6 over
-    // SDIO. Pins are inherited from the 7in board's hardware-confirmed
-    // mapping, not independently confirmed on 10.1in hardware -- resolve
-    // each one through an NVS override first (see "sdio" serial command) so
-    // a different guess can be tried without rebuilding.
+    // SDIO. Pins are schematic-derived, not confirmed on hardware -- resolve
+    // each one through an NVS override first (see "sdio" serial command) so a
+    // different guess can be tried without rebuilding.
     int8_t sdioClk = sdioPinOverride("clk", SDIO2_CLK);
     int8_t sdioCmd = sdioPinOverride("cmd", SDIO2_CMD);
     int8_t sdioD0 = sdioPinOverride("d0", SDIO2_D0);
@@ -180,15 +151,9 @@ void InputHandler(void) {
             if (rotation == 1) { t.y = displayConfig.width - t.y; }
 
             if (rotation == 2) {
-                // Was: t.x = W - t.y; t.y = H - tmp (swap + double inversion,
-                // confirmed mirrored on hardware). Then tried a swap + single
-                // inversion (t.x = W - t.y; t.y = tmp) -- confirmed on
-                // hardware to still be a clean left/right mirror (tapping the
-                // bottom-right arrow moved the on-screen selection left, and
-                // vice versa), with no reported vertical issue. That pattern
-                // -- pure horizontal flip, X only -- doesn't fit a swap-based
-                // transform at all, so trying no swap, direct X invert only.
-                t.x = displayConfig.width - t.x;
+                uint16_t tmp = t.x;
+                t.x = displayConfig.width - t.y;
+                t.y = displayConfig.height - tmp;
             }
             if (rotation == 3) { t.x = displayConfig.height - t.x; }
 

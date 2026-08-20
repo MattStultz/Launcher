@@ -245,7 +245,23 @@ enum HostedGuardState : uint8_t {
 // grinds for ~19 s and then panics: esp_hosted exposes no timeout knob and the
 // IDF libs are pre-built, so the wait cannot be shortened from the inside - but
 // we do not have to sit through it.
-constexpr uint32_t kHostedInitTimeoutMs = 8000;
+//
+// Board-overridable via -D HOSTED_INIT_TIMEOUT_MS=<ms> in platformio.ini.
+// Default 8000 was chosen (by the original author) to bail out before a
+// ~19s hang-then-panic seen on their hardware. elecrow-esp32p4-10in
+// overrides this to 20000: Elecrow's own factory firmware, flashed to that
+// exact unit for comparison, connects to the C6 cleanly in ~14.2s (741ms
+// boot to "Identified slave [esp32c6]" at 14197ms) with the corrected
+// SDIO2_D0-D3 order that board's platformio.ini uses -- 8s was cutting off
+// a connection that would have succeeded. Confirmed working end-to-end
+// (auto-connect + SSID scan) at 20000 on that board. If raising this value
+// instead reproduces the ~19s panic on some other board, that's a genuine
+// deeper issue on that board, not just a too-short timeout -- don't raise
+// it there without the same kind of hardware confirmation.
+#ifndef HOSTED_INIT_TIMEOUT_MS
+#define HOSTED_INIT_TIMEOUT_MS 8000
+#endif
+constexpr uint32_t kHostedInitTimeoutMs = HOSTED_INIT_TIMEOUT_MS;
 
 struct HostedInitCtx {
     int8_t clk, cmd, d0, d1, d2, d3, rst;

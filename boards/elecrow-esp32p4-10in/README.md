@@ -53,14 +53,40 @@ and get it hardware-confirmed before committing.
 2. **`DEVICE_NAME` / `OTA_TAG`** -- cosmetic only, for correct
    identification in Launcher's UI and OTA system.
 
-### Known issues
+### WiFi: working (fixed 2026-08-20)
 
-**WiFi**: not yet independently tested on the 10.1in board specifically
-(the SDIO bridge pins are inherited from the 7in board's hardware-
-confirmed mapping). Elecrow's own *documented* schematic pin order for
-the 7in board's D0-D3 lines was wrong and had to be found by testing --
-the 10.1in board could have the same problem. Use the `sdio` serial
-console command to try alternate pin orders at runtime without rebuilding.
+Took a full separate debugging session. Three things were wrong at once,
+inherited from the 7in board's config without independent verification:
+
+1. **SDIO2_D0-D3 pin order was backwards.** The 7in board's own comment
+   claimed Elecrow's documented schematic order "does not actually work"
+   and needed reversing. That claim doesn't hold on the 10.1in board: the
+   *original* schematic order (D0=17, D1=16, D2=15, D3=14) is correct,
+   confirmed by flashing Elecrow's factory firmware and watching it
+   connect to the C6 cleanly ("Identified slave [esp32c6]") with that
+   exact order. The reversed order genuinely does not work.
+2. **SDIO clock was force-halved to 20MHz** via `LAUNCHER_HOSTED_SDIO_FREQ_KHZ`,
+   working around a CRC issue on the 7in board's own unit that was likely
+   actually the D0-D3 order above, not a real frequency problem. Factory
+   firmware runs this exact 10.1in unit at the library's true default
+   (40MHz) with no issues, so the override was removed.
+3. **`kHostedInitTimeoutMs` (8000ms, in `src/idf/idf_wifi.cpp`) was too
+   short.** A real successful connection on this unit takes ~14.2s
+   (confirmed via factory firmware's own boot log timestamps). Launcher's
+   safety-net timeout was killing the connection attempt and restarting
+   the board *before* it would have succeeded. Now overridable per-board
+   via `-D HOSTED_INIT_TIMEOUT_MS=<ms>`; this board sets it to 20000.
+
+All three had to be fixed together -- any one alone still failed. Also
+worth knowing: Launcher tries a simpler "ESP-AT" protocol first
+(`[wifi-at]` in the logs), which is expected to always fail against this
+C6's real ESP-Hosted firmware -- that failure message is normal, not a
+sign of a problem, as long as it's followed by a successful connection
+via the full ESP-Hosted path afterward.
+
+If a future unit's WiFi doesn't come up, try the *reversed* D0-D3 order
+at runtime before rebuilding: `sdio set 18 19 14 15 16 17 32` (see the
+`sdio` serial console command), in case of real board-revision variance.
 
 **SD card**: "Failed to mount SDCARD" observed during testing, and the
 mount is intermittent -- it succeeded on at least one boot (during which
